@@ -1,0 +1,86 @@
+# env-a / env-b 用の踏み台・対象VMをローカルで再現するテスト環境。
+# アプリ本体（リポジトリルートのDockerfile）とは別の、開発・動作確認専用の
+# docker composeファイル。
+#
+# 使い方:
+#   cd docker/testenv
+#   docker compose up -d --build
+#
+# 接続情報（config.yaml/secrets.yamlの例）:
+#   env-a: bastion=localhost:2222 (testuser/testpass) -> target-vm=target-vm-a:2222
+#   env-b: bastion=localhost:2223 (testuser/testpass) -> target-vm=target-vm-b:2222
+#   対象VMは targetuser + keys/test/target-vm.key（秘密鍵、パスフレーズなし）で接続する。
+#
+# 踏み台のsshd_config（bastion_sshd_config）はAllowTcpForwarding yesを
+# 有効にしたもの（M2検証で判明した、多段SSH接続に必須の設定）。
+
+services:
+  bastion-a:
+    image: lscr.io/linuxserver/openssh-server
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Tokyo
+      - PASSWORD_ACCESS=true
+      - USER_NAME=testuser
+      - USER_PASSWORD=testpass
+    ports:
+      - "2222:2222"
+    volumes:
+      - ./bastion_sshd_config:/config/sshd/sshd_config
+    networks:
+      - env-a-net
+
+  target-vm-a:
+    build:
+      context: .
+      dockerfile: target-vm.Dockerfile
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Tokyo
+      - PUBLIC_KEY_FILE=/keys/target-vm.key.pub
+      - USER_NAME=targetuser
+      - PASSWORD_ACCESS=false
+      - SUDO_ACCESS=true
+    volumes:
+      - ../../keys/test/target-vm.key.pub:/keys/target-vm.key.pub:ro
+    networks:
+      - env-a-net
+
+  bastion-b:
+    image: lscr.io/linuxserver/openssh-server
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Tokyo
+      - PASSWORD_ACCESS=true
+      - USER_NAME=testuser
+      - USER_PASSWORD=testpass
+    ports:
+      - "2223:2222"
+    volumes:
+      - ./bastion_sshd_config:/config/sshd/sshd_config
+    networks:
+      - env-b-net
+
+  target-vm-b:
+    build:
+      context: .
+      dockerfile: target-vm.Dockerfile
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Tokyo
+      - PUBLIC_KEY_FILE=/keys/target-vm.key.pub
+      - USER_NAME=targetuser
+      - PASSWORD_ACCESS=false
+      - SUDO_ACCESS=true
+    volumes:
+      - ../../keys/test/target-vm.key.pub:/keys/target-vm.key.pub:ro
+    networks:
+      - env-b-net
+
+networks:
+  env-a-net:
+  env-b-net:

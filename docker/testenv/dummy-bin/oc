@@ -1,0 +1,29 @@
+#!/bin/sh
+if [ "$1" = "get" ] && [ "$2" = "nodes" ]; then
+  cat <<'EOF'
+NAME               STATUS   ROLES           AGE   VERSION
+dummy-node1        Ready    control-plane   10d   v1.30.2
+dummy-node2        Ready    worker          10d   v1.30.2
+EOF
+elif [ "$1" = "get" ] && [ "$2" = "pods" ]; then
+  cat <<'EOF'
+NAMESPACE     NAME                READY   STATUS    RESTARTS   AGE
+kube-system   dummy-pod-abc123    1/1     Running   0          10d
+default       dummy-app-xyz789    1/1     Running   0          2d
+EOF
+elif [ "$1" = "get" ] && [ "$2" = "co" ]; then
+  cat <<'EOF'
+NAME                                       VERSION      AVAILABLE   PROGRESSING   DEGRADED   SINCE
+dummy-authentication                       4.16.0       True        False         False      10d
+dummy-network                              4.16.0       True        False         False      10d
+EOF
+elif [ "$1" = "get" ] && [ "$2" = "mcp" ]; then
+  cat <<'EOF'
+NAME      CONFIG                                             UPDATED   UPDATING   DEGRADED
+master    rendered-master-dummy1234567890abcdef1234567890ab   True      False      False
+worker    rendered-worker-dummy1234567890abcdef1234567890ab   True      False      False
+EOF
+else
+  echo "oc (dummy): unsupported args: $*" >&2
+  exit 1
+fi
