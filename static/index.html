@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>Infra Status Dashboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>Infra Status Dashboard</h1>
+  <div class="controls">
+    <span id="env-name" class="env-name"></span>
+    <label>更新間隔(秒):
+      <input id="interval-input" type="number" min="5" step="5" value="60">
+    </label>
+    <button id="toggle-btn">一時停止</button>
+    <button id="refresh-btn">今すぐ更新</button>
+    <span id="last-updated" class="last-updated"></span>
+    <span id="status-msg" class="status-msg"></span>
+  </div>
+</header>
+<main id="targets"></main>
+<script src="/app.js"></script>
+</body>
+</html>

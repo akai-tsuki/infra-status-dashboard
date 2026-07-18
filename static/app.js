@@ -1,0 +1,129 @@
+(function () {
+  "use strict";
+
+  const envNameEl = document.getElementById("env-name");
+  const intervalInput = document.getElementById("interval-input");
+  const toggleBtn = document.getElementById("toggle-btn");
+  const refreshBtn = document.getElementById("refresh-btn");
+  const lastUpdatedEl = document.getElementById("last-updated");
+  const statusMsgEl = document.getElementById("status-msg");
+  const targetsEl = document.getElementById("targets");
+
+  let intervalSeconds = 60;
+  let autoRefresh = true;
+  let timerId = null;
+
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function setStatus(msg) {
+    statusMsgEl.textContent = msg;
+  }
+
+  function render(data) {
+    targetsEl.innerHTML = "";
+
+    for (const target of data.targets) {
+      const section = document.createElement("section");
+      section.className = "target";
+
+      const h2 = document.createElement("h2");
+      h2.textContent = `${target.name} (${target.host}) [${target.roles.join(", ")}]`;
+      section.appendChild(h2);
+
+      const table = document.createElement("table");
+      table.innerHTML = "<thead><tr><th>チェック</th><th>コマンド</th><th>exit</th><th>出力</th></tr></thead>";
+      const tbody = document.createElement("tbody");
+
+      for (const check of target.checks) {
+        const output = check.stdout + (check.stderr ? "\n[stderr]\n" + check.stderr : "");
+        const exitClass = check.exit_status === 0 ? "exit-ok" : "exit-error";
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${escapeHtml(check.name)}</td>
+          <td><code>${escapeHtml(check.command)}</code></td>
+          <td class="${exitClass}">${check.exit_status}</td>
+          <td><pre>${escapeHtml(output)}</pre></td>
+        `;
+        tbody.appendChild(tr);
+      }
+
+      table.appendChild(tbody);
+      section.appendChild(table);
+      targetsEl.appendChild(section);
+    }
+  }
+
+  async function fetchAndRender() {
+    setStatus("取得中...");
+    try {
+      const res = await fetch("/api/status");
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      render(data);
+      setStatus("");
+      lastUpdatedEl.textContent = `最終更新: ${new Date().toLocaleTimeString("ja-JP")}`;
+    } catch (err) {
+      setStatus(`取得に失敗しました: ${err.message}`);
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    timerId = setInterval(fetchAndRender, intervalSeconds * 1000);
+  }
+
+  function stopPolling() {
+    if (timerId !== null) {
+      clearInterval(timerId);
+      timerId = null;
+    }
+  }
+
+  toggleBtn.addEventListener("click", () => {
+    autoRefresh = !autoRefresh;
+    toggleBtn.textContent = autoRefresh ? "一時停止" : "再開";
+    if (autoRefresh) {
+      startPolling();
+    } else {
+      stopPolling();
+    }
+  });
+
+  refreshBtn.addEventListener("click", fetchAndRender);
+
+  intervalInput.addEventListener("change", () => {
+    intervalSeconds = Math.max(5, parseInt(intervalInput.value, 10) || 60);
+    intervalInput.value = intervalSeconds;
+    if (autoRefresh) {
+      startPolling();
+    }
+  });
+
+  async function init() {
+    try {
+      const res = await fetch("/api/config");
+      const cfg = await res.json();
+      envNameEl.textContent = `環境: ${cfg.environment}`;
+      intervalSeconds = cfg.polling.interval_seconds;
+      autoRefresh = cfg.polling.auto_refresh;
+      intervalInput.value = intervalSeconds;
+      toggleBtn.textContent = autoRefresh ? "一時停止" : "再開";
+    } catch (err) {
+      setStatus(`設定の取得に失敗しました: ${err.message}`);
+    }
+
+    await fetchAndRender();
+    if (autoRefresh) {
+      startPolling();
+    }
+  }
+
+  init();
+})();
