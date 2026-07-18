@@ -61,8 +61,14 @@ class SSHConnection:
         if stdin_data is not None:
             stdin.write(stdin_data)
             stdin.channel.shutdown_write()
+        # 出力を読み切ってから終了ステータスを取得する。先にrecv_exit_status()を
+        # 呼ぶと、出力がチャネルのウィンドウバッファ（既定約2MB）を超えた場合に
+        # リモート側が書き込み待ちでブロックしたままコマンドが終了できず、
+        # デッドロックする（Issue #16）。
+        stdout_text = stdout.read().decode(errors="replace")
+        stderr_text = stderr.read().decode(errors="replace")
         exit_status = stdout.channel.recv_exit_status()
-        return stdout.read().decode(errors="replace"), stderr.read().decode(errors="replace"), exit_status
+        return stdout_text, stderr_text, exit_status
 
     def close(self) -> None:
         """SSH接続を閉じる。"""
