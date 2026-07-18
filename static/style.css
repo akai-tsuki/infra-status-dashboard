@@ -45,10 +45,6 @@ header h1 {
   background: #4b5563;
 }
 
-.env-name {
-  font-weight: bold;
-}
-
 .status-msg {
   color: #fca5a5;
 }
@@ -56,6 +52,59 @@ header h1 {
 main {
   padding: 20px;
 }
+
+/* ---- サマリー（対象サーバごとのOK/NGバッジ一覧） ---- */
+
+#summary {
+  display: flex;
+  align-items: center;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+}
+
+#summary:not(:empty) {
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 10px 16px;
+  margin-bottom: 20px;
+}
+
+.env-name {
+  font-weight: bold;
+}
+
+.summary-count {
+  color: #374151;
+  font-size: 0.9rem;
+}
+
+.summary-count.ng {
+  color: #b91c1c;
+  font-weight: bold;
+}
+
+.summary-badge {
+  padding: 3px 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+
+.summary-badge.ok {
+  color: #15803d;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.summary-badge.ng {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  font-weight: bold;
+}
+
+/* ---- 対象サーバごとのセクション（折りたたみ可能） ---- */
 
 .target {
   background: #fff;
@@ -65,9 +114,53 @@ main {
   padding: 12px 16px;
 }
 
-.target h2 {
-  margin: 0 0 10px;
+.target summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* display:flexにするとブラウザ標準の開閉マーカーが消えるため自前で描く */
+  list-style: none;
+}
+
+.target summary::-webkit-details-marker {
+  display: none;
+}
+
+.target summary::before {
+  content: "▸";
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+
+.target[open] summary::before {
+  content: "▾";
+}
+
+.target-status-badge {
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: bold;
+}
+
+.target-status-badge.ok {
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+.target-status-badge.ng {
+  color: #fff;
+  background: #b91c1c;
+}
+
+.target-title {
+  font-weight: bold;
   font-size: 1rem;
+}
+
+.target-body {
+  margin-top: 10px;
 }
 
 table {
@@ -104,12 +197,18 @@ td pre {
   font-weight: bold;
 }
 
+/* 正常なステージは横1行のバッジ列、異常なステージは全幅ブロックで表示する */
 .stage-list {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
   margin-bottom: 10px;
   font-size: 0.85rem;
+}
+
+.stage-item-ng {
+  width: 100%;
 }
 
 .stage {
