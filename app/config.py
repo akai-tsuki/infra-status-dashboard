@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 import yaml
 
 
+class ConfigError(Exception):
+    """config.yaml / secrets.yamlの構造・整合性に問題がある場合に送出する。"""
+
+
 @dataclass
 class Bastion:
     host: str
@@ -38,8 +42,11 @@ class Environment:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Environment":
+        name = d.get("name", "(name未設定)")
+        if "bastion" not in d:
+            raise ConfigError(f"config.yamlのenvironments「{name}」にbastionセクションがありません")
         return cls(
-            name=d["name"],
+            name=name,
             bastion=Bastion.from_dict(d["bastion"]),
             targets=[Target.from_dict(t) for t in d.get("targets", [])],
         )
@@ -150,3 +157,44 @@ def load_secrets(path: str) -> Secrets:
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return Secrets.from_dict(data)
+
+
+def validate(cfg: Config, secrets: Secrets) -> list[str]:
+    """config.yamlとsecrets.yaml間、およびconfig.yaml内部の対応関係を検証する。
+
+    問題があった箇所を示す文字列のリストを返す（問題がなければ空リスト）。
+    起動時にまとめて検証することで、KeyError等の分かりにくいエラーで
+    落ちる前に、設定のどこを直すべきかを利用者に提示できるようにする。
+    """
+    problems: list[str] = []
+
+    for env in cfg.environments:
+        env_secrets = secrets.environments.get(env.name)
+        if env_secrets is None:
+            problems.append(
+                f"secrets.yamlにconfig.yamlのenvironments「{env.name}」に対応する認証情報がありません"
+            )
+            continue
+
+        for target in env.targets:
+            if target.name not in env_secrets.targets:
+                problems.append(
+                    f"secrets.yamlの環境「{env.name}」に対象サーバ「{target.name}」の認証情報がありません"
+                )
+
+            for role in target.roles:
+                if role not in cfg.roles:
+                    problems.append(
+                        f"config.yamlのenvironments「{env.name}」の対象サーバ「{target.name}」が"
+                        f"参照しているロール「{role}」がrolesに定義されていません"
+                    )
+
+    for role, check_names in cfg.roles.items():
+        for check_name in check_names:
+            if check_name not in cfg.check_definitions:
+                problems.append(
+                    f"config.yamlのroles「{role}」が参照しているチェック「{check_name}」が"
+                    f"check_definitionsに定義されていません"
+                )
+
+    return problems
