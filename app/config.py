@@ -28,10 +28,17 @@ class Target:
     host: str
     port: int
     roles: list[str]
+    via: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Target":
-        return cls(name=d["name"], host=d["host"], port=d.get("port", 22), roles=d.get("roles", []))
+        return cls(
+            name=d["name"],
+            host=d["host"],
+            port=d.get("port", 22),
+            roles=d.get("roles", []),
+            via=d.get("via"),
+        )
 
 
 @dataclass
@@ -159,6 +166,18 @@ def load_secrets(path: str) -> Secrets:
     return Secrets.from_dict(data)
 
 
+def _has_via_cycle(target: Target, targets_by_name: dict[str, "Target"]) -> bool:
+    """target.viaを辿っていったときに循環参照になっていないかを調べる。"""
+    seen = {target.name}
+    current = target
+    while current.via is not None:
+        if current.via not in targets_by_name or current.via in seen:
+            return current.via in seen
+        seen.add(current.via)
+        current = targets_by_name[current.via]
+    return False
+
+
 def validate(cfg: Config, secrets: Secrets) -> list[str]:
     """config.yamlとsecrets.yaml間、およびconfig.yaml内部の対応関係を検証する。
 
@@ -176,6 +195,8 @@ def validate(cfg: Config, secrets: Secrets) -> list[str]:
             )
             continue
 
+        targets_by_name = {t.name: t for t in env.targets}
+
         for target in env.targets:
             if target.name not in env_secrets.targets:
                 problems.append(
@@ -187,6 +208,18 @@ def validate(cfg: Config, secrets: Secrets) -> list[str]:
                     problems.append(
                         f"config.yamlのenvironments「{env.name}」の対象サーバ「{target.name}」が"
                         f"参照しているロール「{role}」がrolesに定義されていません"
+                    )
+
+            if target.via is not None:
+                if target.via not in targets_by_name:
+                    problems.append(
+                        f"config.yamlのenvironments「{env.name}」の対象サーバ「{target.name}」が"
+                        f"経由先として指定しているvia「{target.via}」が同じ環境のtargetsに存在しません"
+                    )
+                elif _has_via_cycle(target, targets_by_name):
+                    problems.append(
+                        f"config.yamlのenvironments「{env.name}」の対象サーバ「{target.name}」の"
+                        f"viaが循環参照になっています"
                     )
 
     for role, check_names in cfg.roles.items():

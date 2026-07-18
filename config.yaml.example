@@ -25,6 +25,14 @@ environments:
         host: 10.0.0.21
         roles: [sample_role_b]
 
+      # 踏み台から直接ではなく、他のtarget（この例ではopenshift-cmd-vm）を
+      # 中継しないと到達できない対象サーバの例（Issue #9）。
+      # via には同じ環境内の他のtargets[].name を指定する。
+      - name: sample-vm03-behind-cmd-vm
+        host: 10.0.0.30
+        roles: [sample_role_a]
+        via: openshift-cmd-vm
+
   - name: env-b                     # 2つ目の環境。構造はenv-aと同じ
     bastion:
       host: bastion-b.example.local
