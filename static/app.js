@@ -26,6 +26,14 @@
   function render(data) {
     targetsEl.innerHTML = "";
 
+    if (data.bastion_error) {
+      const banner = document.createElement("div");
+      banner.className = "error-banner";
+      banner.textContent = data.bastion_error;
+      targetsEl.appendChild(banner);
+      return;
+    }
+
     for (const target of data.targets) {
       const section = document.createElement("section");
       section.className = "target";
@@ -34,21 +42,38 @@
       h2.textContent = `${target.name} (${target.host}) [${target.roles.join(", ")}]`;
       section.appendChild(h2);
 
+      if (target.error) {
+        const banner = document.createElement("div");
+        banner.className = "error-banner";
+        banner.textContent = target.error;
+        section.appendChild(banner);
+        targetsEl.appendChild(section);
+        continue;
+      }
+
       const table = document.createElement("table");
       table.innerHTML = "<thead><tr><th>チェック</th><th>コマンド</th><th>exit</th><th>出力</th></tr></thead>";
       const tbody = document.createElement("tbody");
 
       for (const check of target.checks) {
-        const output = check.stdout + (check.stderr ? "\n[stderr]\n" + check.stderr : "");
-        const exitClass = check.exit_status === 0 ? "exit-ok" : "exit-error";
-
         const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${escapeHtml(check.name)}</td>
-          <td><code>${escapeHtml(check.command)}</code></td>
-          <td class="${exitClass}">${check.exit_status}</td>
-          <td><pre>${escapeHtml(output)}</pre></td>
-        `;
+
+        if (check.error) {
+          tr.innerHTML = `
+            <td>${escapeHtml(check.name)}</td>
+            <td><code>${escapeHtml(check.command)}</code></td>
+            <td class="exit-error" colspan="2">${escapeHtml(check.error)}</td>
+          `;
+        } else {
+          const output = check.stdout + (check.stderr ? "\n[stderr]\n" + check.stderr : "");
+          const exitClass = check.exit_status === 0 ? "exit-ok" : "exit-error";
+          tr.innerHTML = `
+            <td>${escapeHtml(check.name)}</td>
+            <td><code>${escapeHtml(check.command)}</code></td>
+            <td class="${exitClass}">${check.exit_status}</td>
+            <td><pre>${escapeHtml(output)}</pre></td>
+          `;
+        }
         tbody.appendChild(tr);
       }
 

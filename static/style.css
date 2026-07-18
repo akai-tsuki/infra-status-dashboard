@@ -103,3 +103,12 @@ td pre {
   color: #b91c1c;
   font-weight: bold;
 }
+
+.error-banner {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  border-radius: 4px;
+  padding: 10px 14px;
+  font-weight: bold;
+}
