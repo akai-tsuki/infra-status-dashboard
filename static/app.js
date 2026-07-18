@@ -23,14 +23,39 @@
     statusMsgEl.textContent = msg;
   }
 
+  const STAGE_LABELS = {
+    bastion_network: "踏み台へのネットワーク到達",
+    bastion_auth: "踏み台のSSH認証",
+    target_connect: "対象サーバへの多段SSH接続",
+  };
+
+  function allStagesOk(stages) {
+    return Object.values(stages).every((s) => s.ok);
+  }
+
+  function renderStages(stages) {
+    const container = document.createElement("div");
+    container.className = "stage-list";
+    for (const [key, stage] of Object.entries(stages)) {
+      const label = STAGE_LABELS[key] || key;
+      const span = document.createElement("span");
+      span.className = "stage " + (stage.ok ? "stage-ok" : "stage-ng");
+      let text = (stage.ok ? "✓ " : "✗ ") + label;
+      if (!stage.ok && stage.message) {
+        text += `: ${stage.message}`;
+      }
+      span.textContent = text;
+      container.appendChild(span);
+    }
+    return container;
+  }
+
   function render(data) {
     targetsEl.innerHTML = "";
 
-    if (data.bastion_error) {
-      const banner = document.createElement("div");
-      banner.className = "error-banner";
-      banner.textContent = data.bastion_error;
-      targetsEl.appendChild(banner);
+    targetsEl.appendChild(renderStages(data.stages));
+
+    if (!allStagesOk(data.stages)) {
       return;
     }
 
@@ -41,12 +66,9 @@
       const h2 = document.createElement("h2");
       h2.textContent = `${target.name} (${target.host}) [${target.roles.join(", ")}]`;
       section.appendChild(h2);
+      section.appendChild(renderStages(target.stages));
 
-      if (target.error) {
-        const banner = document.createElement("div");
-        banner.className = "error-banner";
-        banner.textContent = target.error;
-        section.appendChild(banner);
+      if (!allStagesOk(target.stages)) {
         targetsEl.appendChild(section);
         continue;
       }

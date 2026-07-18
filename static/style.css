@@ -104,11 +104,26 @@ td pre {
   font-weight: bold;
 }
 
-.error-banner {
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  color: #b91c1c;
+.stage-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 10px;
+  font-size: 0.85rem;
+}
+
+.stage {
+  padding: 2px 8px;
   border-radius: 4px;
-  padding: 10px 14px;
+}
+
+.stage-ok {
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+.stage-ng {
+  color: #b91c1c;
+  background: #fef2f2;
   font-weight: bold;
 }
