@@ -7,6 +7,7 @@
   const refreshBtn = document.getElementById("refresh-btn");
   const lastUpdatedEl = document.getElementById("last-updated");
   const statusMsgEl = document.getElementById("status-msg");
+  const summaryEl = document.getElementById("summary");
   const targetsEl = document.getElementById("targets");
 
   // チェックの実行間隔はサーバ側（StatusPoller）の設定。画面はキャッシュを
@@ -16,6 +17,15 @@
 
   // サーバ側の最新スナップショットを反映した自動更新ON/OFF（トグル操作に使う）
   let autoRefresh = true;
+  // 表示済み結果のキー（環境名+実行時刻）。同じ結果を5秒ごとに再描画して
+  // スクロール位置や折りたたみ操作を毎回リセットしないための判定に使う。
+  let renderedKey = null;
+  // 直近に表示できたチェック実行時刻。取得失敗時に「表示中のデータが
+  // いつ時点のものか」を示すために保持する。
+  let lastCheckedAt = null;
+  // ユーザーが手動で開閉した対象サーバの状態（キー: 環境名/対象サーバ名）。
+  // 再描画時のデフォルト（異常なら開く・正常なら閉じる）より優先する。
+  const manualOpenState = new Map();
 
   function escapeHtml(str) {
     const div = document.createElement("div");
@@ -39,12 +49,19 @@
     return Object.values(stages).every((s) => s.ok);
   }
 
+  function checkOk(check) {
+    return !check.error && check.exit_status === 0;
+  }
+
+  function targetOk(target) {
+    return allStagesOk(target.stages) && target.checks.every(checkOk);
+  }
+
   function renderStages(stages) {
     const container = document.createElement("div");
     container.className = "stage-list";
     for (const [key, stage] of Object.entries(stages)) {
       const label = STAGE_LABELS[key] || key;
-      const item = document.createElement("div");
 
       const span = document.createElement("span");
       span.className = "stage " + (stage.ok ? "stage-ok" : "stage-ng");
@@ -53,21 +70,91 @@
         text += `: ${stage.message}`;
       }
       span.textContent = text;
-      item.appendChild(span);
 
-      if (stage.output) {
-        const pre = document.createElement("pre");
-        pre.className = "stage-output";
-        pre.textContent = stage.output;
-        item.appendChild(pre);
+      if (stage.ok) {
+        // 正常なステージは1行に並ぶ小さなバッジとして表示する
+        container.appendChild(span);
+      } else {
+        // 異常なステージはメッセージ・出力ごと1ブロックで表示する
+        const item = document.createElement("div");
+        item.className = "stage-item-ng";
+        item.appendChild(span);
+        if (stage.output) {
+          const pre = document.createElement("pre");
+          pre.className = "stage-output";
+          pre.textContent = stage.output;
+          item.appendChild(pre);
+        }
+        container.appendChild(item);
       }
-
-      container.appendChild(item);
     }
     return container;
   }
 
+  function renderSummary(data) {
+    summaryEl.innerHTML = "";
+
+    const envSpan = document.createElement("span");
+    envSpan.className = "env-name";
+    envSpan.textContent = `環境: ${data.environment}`;
+    summaryEl.appendChild(envSpan);
+
+    if (!allStagesOk(data.stages)) {
+      const badge = document.createElement("span");
+      badge.className = "summary-badge ng";
+      badge.textContent = "踏み台接続 NG";
+      summaryEl.appendChild(badge);
+      return;
+    }
+
+    const okCount = data.targets.filter(targetOk).length;
+    const count = document.createElement("span");
+    count.className = "summary-count" + (okCount === data.targets.length ? "" : " ng");
+    count.textContent = `正常 ${okCount} / ${data.targets.length}`;
+    summaryEl.appendChild(count);
+
+    data.targets.forEach((target, i) => {
+      const badge = document.createElement("a");
+      badge.className = "summary-badge " + (targetOk(target) ? "ok" : "ng");
+      badge.href = `#target-${i}`;
+      badge.textContent = target.name;
+      summaryEl.appendChild(badge);
+    });
+  }
+
+  function renderChecksTable(target) {
+    const table = document.createElement("table");
+    table.innerHTML = "<thead><tr><th>チェック</th><th>コマンド</th><th>exit</th><th>出力</th></tr></thead>";
+    const tbody = document.createElement("tbody");
+
+    for (const check of target.checks) {
+      const tr = document.createElement("tr");
+
+      if (check.error) {
+        tr.innerHTML = `
+          <td>${escapeHtml(check.name)}</td>
+          <td><code>${escapeHtml(check.command)}</code></td>
+          <td class="exit-error" colspan="2">${escapeHtml(check.error)}</td>
+        `;
+      } else {
+        const output = check.stdout + (check.stderr ? "\n[stderr]\n" + check.stderr : "");
+        const exitClass = check.exit_status === 0 ? "exit-ok" : "exit-error";
+        tr.innerHTML = `
+          <td>${escapeHtml(check.name)}</td>
+          <td><code>${escapeHtml(check.command)}</code></td>
+          <td class="${exitClass}">${check.exit_status}</td>
+          <td><pre>${escapeHtml(output)}</pre></td>
+        `;
+      }
+      tbody.appendChild(tr);
+    }
+
+    table.appendChild(tbody);
+    return table;
+  }
+
   function render(data) {
+    renderSummary(data);
     targetsEl.innerHTML = "";
 
     targetsEl.appendChild(renderStages(data.stages));
@@ -76,56 +163,62 @@
       return;
     }
 
-    for (const target of data.targets) {
-      const section = document.createElement("section");
-      section.className = "target";
+    data.targets.forEach((target, i) => {
+      const details = document.createElement("details");
+      details.className = "target";
+      details.id = `target-${i}`;
 
-      const h2 = document.createElement("h2");
-      h2.textContent = `${target.name} (${target.host}) [${target.roles.join(", ")}]`;
-      section.appendChild(h2);
-      section.appendChild(renderStages(target.stages));
+      const ok = targetOk(target);
+      const stateKey = `${data.environment}/${target.name}`;
+      // 既定では異常な対象サーバだけ開く。ユーザーが手動で開閉していれば
+      // その状態を優先して維持する。
+      details.open = manualOpenState.has(stateKey) ? manualOpenState.get(stateKey) : !ok;
 
-      if (!allStagesOk(target.stages)) {
-        targetsEl.appendChild(section);
-        continue;
+      const summary = document.createElement("summary");
+      const badge = document.createElement("span");
+      badge.className = "target-status-badge " + (ok ? "ok" : "ng");
+      badge.textContent = ok ? "OK" : "NG";
+      const title = document.createElement("span");
+      title.className = "target-title";
+      title.textContent = `${target.name} (${target.host}) [${target.roles.join(", ")}]`;
+      summary.appendChild(badge);
+      summary.appendChild(title);
+      summary.addEventListener("click", () => {
+        // クリック直後はopenがまだ切り替わっていないため、切り替え完了後に記録する
+        setTimeout(() => manualOpenState.set(stateKey, details.open), 0);
+      });
+      details.appendChild(summary);
+
+      const body = document.createElement("div");
+      body.className = "target-body";
+      body.appendChild(renderStages(target.stages));
+      if (allStagesOk(target.stages)) {
+        body.appendChild(renderChecksTable(target));
       }
+      details.appendChild(body);
 
-      const table = document.createElement("table");
-      table.innerHTML = "<thead><tr><th>チェック</th><th>コマンド</th><th>exit</th><th>出力</th></tr></thead>";
-      const tbody = document.createElement("tbody");
+      targetsEl.appendChild(details);
+    });
+  }
 
-      for (const check of target.checks) {
-        const tr = document.createElement("tr");
-
-        if (check.error) {
-          tr.innerHTML = `
-            <td>${escapeHtml(check.name)}</td>
-            <td><code>${escapeHtml(check.command)}</code></td>
-            <td class="exit-error" colspan="2">${escapeHtml(check.error)}</td>
-          `;
-        } else {
-          const output = check.stdout + (check.stderr ? "\n[stderr]\n" + check.stderr : "");
-          const exitClass = check.exit_status === 0 ? "exit-ok" : "exit-error";
-          tr.innerHTML = `
-            <td>${escapeHtml(check.name)}</td>
-            <td><code>${escapeHtml(check.command)}</code></td>
-            <td class="${exitClass}">${check.exit_status}</td>
-            <td><pre>${escapeHtml(output)}</pre></td>
-          `;
-        }
-        tbody.appendChild(tr);
-      }
-
-      table.appendChild(tbody);
-      section.appendChild(table);
-      targetsEl.appendChild(section);
-    }
+  function renderNoResult(running) {
+    summaryEl.innerHTML = "";
+    targetsEl.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "no-result";
+    p.textContent = running
+      ? "チェックを実行しています。しばらくお待ちください..."
+      : "まだチェック結果がありません。「今すぐ更新」を押してください。";
+    targetsEl.appendChild(p);
   }
 
   // サーバのスナップショット（キャッシュ済み結果＋実行状態＋設定）を画面に反映する
   function applySnapshot(data) {
     autoRefresh = data.polling.auto_refresh;
     toggleBtn.textContent = autoRefresh ? "一時停止" : "再開";
+    // チェック実行中は手動更新を受け付けない（サーバ側でも多重起動はしないが、
+    // 押せてしまうと実行されたのか分かりにくいため画面側でも防ぐ）
+    refreshBtn.disabled = data.running;
 
     // ユーザーが入力・選択の操作中の要素は上書きしない
     if (document.activeElement !== intervalInput) {
@@ -138,21 +231,40 @@
     setStatus(data.running ? "チェック実行中..." : "");
 
     if (data.result) {
-      render(data.result);
+      lastCheckedAt = data.checked_at;
       lastUpdatedEl.textContent = `最終更新: ${data.checked_at}`;
+      // 同じ結果の再描画はスクロール位置や開閉状態を乱すだけなのでスキップする
+      const key = `${data.current_environment}|${data.checked_at}`;
+      if (key !== renderedKey) {
+        renderedKey = key;
+        render(data.result);
+      }
     } else {
-      targetsEl.innerHTML = "";
-      const p = document.createElement("p");
-      p.className = "no-result";
-      p.textContent = data.running
-        ? "チェックを実行しています。しばらくお待ちください..."
-        : "まだチェック結果がありません。「今すぐ更新」を押してください。";
-      targetsEl.appendChild(p);
       lastUpdatedEl.textContent = "";
+      const key = `empty|${data.running}`;
+      if (key !== renderedKey) {
+        renderedKey = key;
+        renderNoResult(data.running);
+      }
     }
   }
 
+  // 取得失敗時：表示中の結果は残しつつ、いつ時点のデータかを明示する
+  function markFetchFailed(message) {
+    setStatus(message);
+    if (lastCheckedAt !== null) {
+      lastUpdatedEl.textContent = `最終更新: ${lastCheckedAt}（最新の取得に失敗）`;
+    }
+  }
+
+  let fetching = false;
+
   async function fetchStatus() {
+    // 応答遅延時に取得が重ならないようにする
+    if (fetching) {
+      return;
+    }
+    fetching = true;
     try {
       const res = await fetch("/api/status");
       if (!res.ok) {
@@ -160,8 +272,16 @@
       }
       applySnapshot(await res.json());
     } catch (err) {
-      setStatus(`取得に失敗しました: ${err.message}`);
+      markFetchFailed(`取得に失敗しました: ${err.message}`);
+    } finally {
+      fetching = false;
     }
+  }
+
+  // setIntervalではなく「完了してから次回を予約する」方式で、遅延時の重複を防ぐ
+  async function pollLoop() {
+    await fetchStatus();
+    setTimeout(pollLoop, UI_POLL_SECONDS * 1000);
   }
 
   async function postJson(url, body) {
@@ -186,9 +306,12 @@
   });
 
   refreshBtn.addEventListener("click", async () => {
+    refreshBtn.disabled = true;
     try {
       applySnapshot(await postJson("/api/refresh", {}));
+      setStatus("チェック実行中...");
     } catch (err) {
+      refreshBtn.disabled = false;
       setStatus(`更新の指示に失敗しました: ${err.message}`);
     }
   });
@@ -228,8 +351,7 @@
       setStatus(`設定の取得に失敗しました: ${err.message}`);
     }
 
-    await fetchStatus();
-    setInterval(fetchStatus, UI_POLL_SECONDS * 1000);
+    pollLoop();
   }
 
   init();
