@@ -1,11 +1,14 @@
 """起動スクリプト。config.yaml / secrets.yaml をロードし、Flask + waitressでREST APIサーバを起動する。"""
 
 import argparse
+import sys
 
 from waitress import serve
 
-from app.config import load_config, load_secrets
+from app.config import ConfigError, load_config, load_secrets, validate
 from app.server import create_app
+
+sys.stdout.reconfigure(encoding="utf-8")
 
 
 def resolve_listen_addr(listen_addr: str) -> tuple[str, int]:
@@ -20,8 +23,19 @@ def main() -> None:
     parser.add_argument("--secrets", default="secrets.yaml", help="secrets.yaml のパス")
     args = parser.parse_args()
 
-    cfg = load_config(args.config)
-    secrets = load_secrets(args.secrets)
+    try:
+        cfg = load_config(args.config)
+        secrets = load_secrets(args.secrets)
+    except (ConfigError, FileNotFoundError, KeyError) as e:
+        print(f"[ERROR] 設定ファイルの読み込みに失敗しました: {e}")
+        sys.exit(1)
+
+    problems = validate(cfg, secrets)
+    if problems:
+        print("[ERROR] config.yaml / secrets.yamlに以下の問題があります。修正してから起動してください。")
+        for problem in problems:
+            print(f"  - {problem}")
+        sys.exit(1)
 
     host, port = resolve_listen_addr(cfg.web.listen_addr)
 
