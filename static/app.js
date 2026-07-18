@@ -9,9 +9,13 @@
   const statusMsgEl = document.getElementById("status-msg");
   const targetsEl = document.getElementById("targets");
 
-  let intervalSeconds = 60;
+  // チェックの実行間隔はサーバ側（StatusPoller）の設定。画面はキャッシュを
+  // 定期的に取りに行くだけなので、固定の短い間隔でポーリングしてよい
+  // （/api/statusはSSH接続を伴わず即時に返る）。
+  const UI_POLL_SECONDS = 5;
+
+  // サーバ側の最新スナップショットを反映した自動更新ON/OFF（トグル操作に使う）
   let autoRefresh = true;
-  let timerId = null;
 
   function escapeHtml(str) {
     const div = document.createElement("div");
@@ -28,6 +32,7 @@
     bastion_auth: "踏み台のSSH認証",
     target_connect: "対象サーバへの多段SSH接続",
     target_setup: "事前処理",
+    internal_error: "内部エラー",
   };
 
   function allStagesOk(stages) {
@@ -117,71 +122,92 @@
     }
   }
 
-  async function fetchAndRender() {
-    setStatus("取得中...");
+  // サーバのスナップショット（キャッシュ済み結果＋実行状態＋設定）を画面に反映する
+  function applySnapshot(data) {
+    autoRefresh = data.polling.auto_refresh;
+    toggleBtn.textContent = autoRefresh ? "一時停止" : "再開";
+
+    // ユーザーが入力・選択の操作中の要素は上書きしない
+    if (document.activeElement !== intervalInput) {
+      intervalInput.value = data.polling.interval_seconds;
+    }
+    if (document.activeElement !== envSelectEl) {
+      envSelectEl.value = data.current_environment;
+    }
+
+    setStatus(data.running ? "チェック実行中..." : "");
+
+    if (data.result) {
+      render(data.result);
+      lastUpdatedEl.textContent = `最終更新: ${data.checked_at}`;
+    } else {
+      targetsEl.innerHTML = "";
+      const p = document.createElement("p");
+      p.className = "no-result";
+      p.textContent = data.running
+        ? "チェックを実行しています。しばらくお待ちください..."
+        : "まだチェック結果がありません。「今すぐ更新」を押してください。";
+      targetsEl.appendChild(p);
+      lastUpdatedEl.textContent = "";
+    }
+  }
+
+  async function fetchStatus() {
     try {
       const res = await fetch("/api/status");
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
-      const data = await res.json();
-      render(data);
-      setStatus("");
-      lastUpdatedEl.textContent = `最終更新: ${new Date().toLocaleTimeString("ja-JP")}`;
+      applySnapshot(await res.json());
     } catch (err) {
       setStatus(`取得に失敗しました: ${err.message}`);
     }
   }
 
-  function startPolling() {
-    stopPolling();
-    timerId = setInterval(fetchAndRender, intervalSeconds * 1000);
-  }
-
-  function stopPolling() {
-    if (timerId !== null) {
-      clearInterval(timerId);
-      timerId = null;
+  async function postJson(url, body) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      throw new Error(b.error || `HTTP ${res.status}`);
     }
+    return res.json();
   }
 
-  toggleBtn.addEventListener("click", () => {
-    autoRefresh = !autoRefresh;
-    toggleBtn.textContent = autoRefresh ? "一時停止" : "再開";
-    if (autoRefresh) {
-      startPolling();
-    } else {
-      stopPolling();
+  toggleBtn.addEventListener("click", async () => {
+    try {
+      applySnapshot(await postJson("/api/polling", { auto_refresh: !autoRefresh }));
+    } catch (err) {
+      setStatus(`設定の変更に失敗しました: ${err.message}`);
     }
   });
 
-  refreshBtn.addEventListener("click", fetchAndRender);
+  refreshBtn.addEventListener("click", async () => {
+    try {
+      applySnapshot(await postJson("/api/refresh", {}));
+    } catch (err) {
+      setStatus(`更新の指示に失敗しました: ${err.message}`);
+    }
+  });
 
   envSelectEl.addEventListener("change", async () => {
-    const name = envSelectEl.value;
-    setStatus("環境切り替え中...");
     try {
-      const res = await fetch("/api/environment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      setStatus("");
-      await fetchAndRender();
+      applySnapshot(await postJson("/api/environment", { name: envSelectEl.value }));
     } catch (err) {
       setStatus(`環境切り替えに失敗しました: ${err.message}`);
     }
   });
 
-  intervalInput.addEventListener("change", () => {
-    intervalSeconds = Math.max(5, parseInt(intervalInput.value, 10) || 60);
-    intervalInput.value = intervalSeconds;
-    if (autoRefresh) {
-      startPolling();
+  intervalInput.addEventListener("change", async () => {
+    const seconds = Math.max(5, parseInt(intervalInput.value, 10) || 60);
+    intervalInput.value = seconds;
+    try {
+      applySnapshot(await postJson("/api/polling", { interval_seconds: seconds }));
+    } catch (err) {
+      setStatus(`設定の変更に失敗しました: ${err.message}`);
     }
   });
 
@@ -198,19 +224,12 @@
         envSelectEl.appendChild(option);
       }
       envSelectEl.value = cfg.current_environment;
-
-      intervalSeconds = cfg.polling.interval_seconds;
-      autoRefresh = cfg.polling.auto_refresh;
-      intervalInput.value = intervalSeconds;
-      toggleBtn.textContent = autoRefresh ? "一時停止" : "再開";
     } catch (err) {
       setStatus(`設定の取得に失敗しました: ${err.message}`);
     }
 
-    await fetchAndRender();
-    if (autoRefresh) {
-      startPolling();
-    }
+    await fetchStatus();
+    setInterval(fetchStatus, UI_POLL_SECONDS * 1000);
   }
 
   init();

@@ -129,6 +129,10 @@ td pre {
   font-weight: bold;
 }
 
+.no-result {
+  color: #6b7280;
+}
+
 .stage-output {
   margin: 4px 0 0 8px;
   padding: 6px 8px;
