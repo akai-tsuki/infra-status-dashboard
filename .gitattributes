@@ -1,0 +1,6 @@
+# git archive（リリースzip作成）から開発・検証専用ファイルを除外する。
+# 実際のWindows実機での配布・起動には不要なため。
+docker/ export-ignore
+Dockerfile export-ignore
+.dockerignore export-ignore
+files/ export-ignore
