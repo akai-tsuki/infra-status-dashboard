@@ -19,6 +19,7 @@ class Bastion:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Bastion":
+        """config.yamlのbastionセクションの辞書からBastionを組み立てる。"""
         return cls(host=d["host"], port=d.get("port", 22), auth_type=d["auth_type"])
 
 
@@ -28,10 +29,18 @@ class Target:
     host: str
     port: int
     roles: list[str]
+    via: str | None = None
 
     @classmethod
     def from_dict(cls, d: dict) -> "Target":
-        return cls(name=d["name"], host=d["host"], port=d.get("port", 22), roles=d.get("roles", []))
+        """config.yamlのtargets[]の1要素の辞書からTargetを組み立てる。"""
+        return cls(
+            name=d["name"],
+            host=d["host"],
+            port=d.get("port", 22),
+            roles=d.get("roles", []),
+            via=d.get("via"),
+        )
 
 
 @dataclass
@@ -42,6 +51,11 @@ class Environment:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Environment":
+        """config.yamlのenvironments[]の1要素の辞書からEnvironmentを組み立てる。
+
+        bastionセクションが無い場合は、生のKeyErrorではなくConfigErrorを
+        送出し、どの環境の設定が問題かを分かるようにする。
+        """
         name = d.get("name", "(name未設定)")
         if "bastion" not in d:
             raise ConfigError(f"config.yamlのenvironments「{name}」にbastionセクションがありません")
@@ -59,6 +73,7 @@ class CheckDefinition:
 
     @classmethod
     def from_dict(cls, d: dict) -> "CheckDefinition":
+        """config.yamlのcheck_definitions内の1エントリからCheckDefinitionを組み立てる。"""
         return cls(command=d["command"], parser=d["parser"])
 
 
@@ -69,6 +84,7 @@ class Polling:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Polling":
+        """config.yamlのpollingセクションの辞書からPollingを組み立てる。"""
         return cls(interval_seconds=d["interval_seconds"], auto_refresh=d["auto_refresh"])
 
 
@@ -79,6 +95,7 @@ class Web:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Web":
+        """config.yamlのwebセクションの辞書からWebを組み立てる。"""
         return cls(listen_addr=d["listen_addr"], auth=d["auth"])
 
 
@@ -92,6 +109,7 @@ class Config:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
+        """config.yaml全体の辞書（yaml.safe_loadの結果）からConfigを組み立てる。"""
         return cls(
             environments=[Environment.from_dict(e) for e in d.get("environments", [])],
             roles=d.get("roles", {}),
@@ -110,6 +128,7 @@ class BastionSecret:
 
     @classmethod
     def from_dict(cls, d: dict) -> "BastionSecret":
+        """secrets.yamlのbastionセクションの辞書からBastionSecretを組み立てる。"""
         return cls(username=d["username"], password=d["password"])
 
 
@@ -120,6 +139,7 @@ class TargetSecret:
 
     @classmethod
     def from_dict(cls, d: dict) -> "TargetSecret":
+        """secrets.yamlのtargets内の1エントリからTargetSecretを組み立てる。"""
         return cls(username=d["username"], private_key_path=d["private_key_path"])
 
 
@@ -130,6 +150,7 @@ class EnvSecrets:
 
     @classmethod
     def from_dict(cls, d: dict) -> "EnvSecrets":
+        """secrets.yamlのenvironments内の1環境分の辞書からEnvSecretsを組み立てる。"""
         return cls(
             bastion=BastionSecret.from_dict(d["bastion"]),
             targets={name: TargetSecret.from_dict(v) for name, v in d.get("targets", {}).items()},
@@ -142,21 +163,36 @@ class Secrets:
 
     @classmethod
     def from_dict(cls, d: dict) -> "Secrets":
+        """secrets.yaml全体の辞書（yaml.safe_loadの結果）からSecretsを組み立てる。"""
         return cls(
             environments={name: EnvSecrets.from_dict(v) for name, v in d.get("environments", {}).items()}
         )
 
 
 def load_config(path: str) -> Config:
+    """指定パスのconfig.yamlを読み込みConfigを返す。"""
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return Config.from_dict(data)
 
 
 def load_secrets(path: str) -> Secrets:
+    """指定パスのsecrets.yamlを読み込みSecretsを返す。"""
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
     return Secrets.from_dict(data)
+
+
+def _has_via_cycle(target: Target, targets_by_name: dict[str, "Target"]) -> bool:
+    """target.viaを辿っていったときに循環参照になっていないかを調べる。"""
+    seen = {target.name}
+    current = target
+    while current.via is not None:
+        if current.via not in targets_by_name or current.via in seen:
+            return current.via in seen
+        seen.add(current.via)
+        current = targets_by_name[current.via]
+    return False
 
 
 def validate(cfg: Config, secrets: Secrets) -> list[str]:
@@ -176,6 +212,8 @@ def validate(cfg: Config, secrets: Secrets) -> list[str]:
             )
             continue
 
+        targets_by_name = {t.name: t for t in env.targets}
+
         for target in env.targets:
             if target.name not in env_secrets.targets:
                 problems.append(
@@ -187,6 +225,18 @@ def validate(cfg: Config, secrets: Secrets) -> list[str]:
                     problems.append(
                         f"config.yamlのenvironments「{env.name}」の対象サーバ「{target.name}」が"
                         f"参照しているロール「{role}」がrolesに定義されていません"
+                    )
+
+            if target.via is not None:
+                if target.via not in targets_by_name:
+                    problems.append(
+                        f"config.yamlのenvironments「{env.name}」の対象サーバ「{target.name}」が"
+                        f"経由先として指定しているvia「{target.via}」が同じ環境のtargetsに存在しません"
+                    )
+                elif _has_via_cycle(target, targets_by_name):
+                    problems.append(
+                        f"config.yamlのenvironments「{env.name}」の対象サーバ「{target.name}」の"
+                        f"viaが循環参照になっています"
                     )
 
     for role, check_names in cfg.roles.items():

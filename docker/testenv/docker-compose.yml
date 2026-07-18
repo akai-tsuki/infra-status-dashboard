@@ -13,6 +13,13 @@
 #
 # 踏み台のsshd_config（bastion_sshd_config）はAllowTcpForwarding yesを
 # 有効にしたもの（M2検証で判明した、多段SSH接続に必須の設定）。
+#
+# command-server / target-deep は、targets[].via（Issue #9、踏み台→
+# コマンドサーバ→対象サーバの3段構成）検証用。command-serverはenv-a-netと
+# env-a-deep-netの両方に参加する中継役で、target-deepはenv-a-deep-netの
+# みに参加しているため、bastion-aから直接は到達できない
+# （command-server経由でのみ到達可能）。中継役となるcommand-serverの
+# sshd_configにもAllowTcpForwarding yesが必要（bastion同様）。
 
 services:
   bastion-a:
@@ -81,6 +88,39 @@ services:
     networks:
       - env-b-net
 
+  command-server:
+    image: lscr.io/linuxserver/openssh-server
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Tokyo
+      - PUBLIC_KEY_FILE=/keys/command-server.key.pub
+      - USER_NAME=cmdadmin
+      - PASSWORD_ACCESS=false
+      - SUDO_ACCESS=true
+    volumes:
+      - ./bastion_sshd_config:/config/sshd/sshd_config
+      - ../../keys/test/command-server.key.pub:/keys/command-server.key.pub:ro
+    networks:
+      - env-a-net
+      - env-a-deep-net
+
+  target-deep:
+    image: lscr.io/linuxserver/openssh-server
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Tokyo
+      - PUBLIC_KEY_FILE=/keys/target-deep.key.pub
+      - USER_NAME=deepadmin
+      - PASSWORD_ACCESS=false
+      - SUDO_ACCESS=true
+    volumes:
+      - ../../keys/test/target-deep.key.pub:/keys/target-deep.key.pub:ro
+    networks:
+      - env-a-deep-net
+
 networks:
   env-a-net:
   env-b-net:
+  env-a-deep-net:

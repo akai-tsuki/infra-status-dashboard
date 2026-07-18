@@ -14,11 +14,18 @@
 踏み台や対象サーバに繋がっていない状態を、画面上で見分けられるようにする
 ため。事前処理・ログイン（oc login等）の段階は未実装で、実装時にここへ
 追加する想定。
+
+対象サーバによっては、踏み台から直接ではなく、別の対象サーバ（コマンド
+実行用VM等）を経由しないと到達できない場合がある。targets[].viaで
+経由先の対象サーバ名を指定すると、踏み台→(via)→対象サーバの順に
+チャネルを継ぎ足して接続する（viaはさらに別のviaを持てるため、理論上は
+何段でも辿れる）。
 """
 
 from __future__ import annotations
 
 import socket
+from contextlib import ExitStack
 
 import paramiko
 
@@ -43,8 +50,8 @@ def _classify_connection_error(e: Exception) -> str:
     if isinstance(e, (ConnectionRefusedError, TimeoutError)):
         return f"接続に失敗しました（接続拒否またはタイムアウト）: {e}"
     if isinstance(e, paramiko.ChannelException):
-        # 多段接続で、踏み台から対象サーバへのTCP到達に失敗した場合
-        return f"対象サーバへの到達に失敗しました（DNS解決失敗・接続拒否等）: {e}"
+        # 多段接続で、手前のホップから次のホップへのTCP到達に失敗した場合
+        return f"到達に失敗しました（DNS解決失敗・接続拒否等）: {e}"
     if isinstance(e, paramiko.AuthenticationException):
         return f"認証に失敗しました: {e}"
     if isinstance(e, paramiko.SSHException):
@@ -53,6 +60,7 @@ def _classify_connection_error(e: Exception) -> str:
 
 
 def _stage(ok: bool, message: str | None = None) -> dict:
+    """1段階分のステータス（成否とメッセージ）を表す辞書を組み立てる。"""
     return {"ok": ok, "message": message}
 
 
@@ -66,7 +74,55 @@ def _check_names_for_target(cfg: Config, target: Target) -> list[str]:
     return names
 
 
+def _build_hop_chain(target: Target, targets_by_name: dict[str, Target]) -> list[Target]:
+    """踏み台に近い方から並べた、targetまでの経由ホップ列を返す（target自身を含む）。"""
+    chain = [target]
+    current = target
+    while current.via is not None:
+        current = targets_by_name[current.via]
+        chain.append(current)
+    chain.reverse()
+    return chain
+
+
+def _connect_chain(
+    stack: ExitStack, secrets_for_env, bastion: SSHConnection, chain: list[Target]
+) -> tuple[SSHConnection | None, str | None, str | None]:
+    """踏み台から順にchainの各ホップへ接続する。
+
+    成功時は (最終ホップへの接続, None, None) を返す。途中で失敗した場合は
+    (None, 失敗したホップ名, エラーメッセージ) を返す。
+    """
+    conn = bastion
+    for hop in chain:
+        secret = secrets_for_env.targets.get(hop.name)
+        if secret is None:
+            return None, hop.name, f"secrets.yamlに「{hop.name}」の認証情報がありません"
+
+        try:
+            channel = conn.open_channel_to(hop.host, hop.port)
+            conn = stack.enter_context(
+                SSHConnection(
+                    host=hop.host,
+                    port=hop.port,
+                    username=secret.username,
+                    key_filename=secret.private_key_path,
+                    sock=channel,
+                )
+            )
+        except CONNECTION_ERRORS as e:
+            return None, hop.name, _classify_connection_error(e)
+
+    return conn, None, None
+
+
 def _run_target_checks(cfg: Config, target: Target, target_conn: SSHConnection) -> list[dict]:
+    """接続済みの対象サーバに対し、割り当てられた全チェックを実行し結果を返す。
+
+    チェック単位の実行失敗（コマンドが例外を投げた場合。非ゼロ終了コード
+    自体は正常応答として扱い、ここでは失敗にしない）は、他のチェックに
+    影響させず"error"フィールドとして個別の結果に含める。
+    """
     checks = []
     for check_name in _check_names_for_target(cfg, target):
         check_def = cfg.check_definitions[check_name]
@@ -98,40 +154,35 @@ def _run_target_checks(cfg: Config, target: Target, target_conn: SSHConnection) 
     return checks
 
 
-def _run_target(cfg: Config, secrets_for_env, bastion: SSHConnection, target: Target) -> dict:
-    target_secret = secrets_for_env.targets.get(target.name)
-    if target_secret is None:
-        return {
-            "name": target.name,
-            "host": target.host,
-            "roles": target.roles,
-            "stages": {
-                "target_connect": _stage(
-                    False, f"secrets.yamlに対象サーバ「{target.name}」の認証情報がありません"
-                )
-            },
-            "checks": [],
-        }
+def _run_target(
+    cfg: Config,
+    secrets_for_env,
+    bastion: SSHConnection,
+    target: Target,
+    targets_by_name: dict[str, Target],
+) -> dict:
+    """1台の対象サーバについて、viaを辿って接続した上で全チェックを実行する。
 
-    try:
-        channel = bastion.open_channel_to(target.host, target.port)
-        target_conn = SSHConnection(
-            host=target.host,
-            port=target.port,
-            username=target_secret.username,
-            key_filename=target_secret.private_key_path,
-            sock=channel,
-        )
-    except CONNECTION_ERRORS as e:
-        return {
-            "name": target.name,
-            "host": target.host,
-            "roles": target.roles,
-            "stages": {"target_connect": _stage(False, _classify_connection_error(e))},
-            "checks": [],
-        }
+    経路上のいずれかのホップへの接続に失敗した場合は、チェックを実行せず
+    target_connectステージを失敗として返す（他の対象サーバの結果には
+    影響しない）。
+    """
+    chain = _build_hop_chain(target, targets_by_name)
 
-    with target_conn:
+    with ExitStack() as stack:
+        target_conn, failed_hop, message = _connect_chain(stack, secrets_for_env, bastion, chain)
+
+        if target_conn is None:
+            if failed_hop != target.name:
+                message = f"中継サーバ「{failed_hop}」への接続に失敗しました: {message}"
+            return {
+                "name": target.name,
+                "host": target.host,
+                "roles": target.roles,
+                "stages": {"target_connect": _stage(False, message)},
+                "checks": [],
+            }
+
         checks = _run_target_checks(cfg, target, target_conn)
 
     return {
@@ -187,8 +238,12 @@ def run_checks(cfg: Config, secrets: Secrets, env_name: str | None = None) -> di
             "targets": [],
         }
 
+    targets_by_name = {t.name: t for t in env.targets}
+
     with bastion:
-        target_results = [_run_target(cfg, env_secrets, bastion, target) for target in env.targets]
+        target_results = [
+            _run_target(cfg, env_secrets, bastion, target, targets_by_name) for target in env.targets
+        ]
 
     return {
         "environment": env.name,
