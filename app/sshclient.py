@@ -18,6 +18,11 @@ class SSHConnection:
         timeout: float = 10.0,
         sock: paramiko.Channel | None = None,
     ) -> None:
+        """指定したホストへSSH接続を確立する。
+
+        sockを指定すると、新規にTCPソケットを開かずそのチャネル上で接続する
+        （多段SSH接続で、他の接続のopen_channel_toが返したチャネルを渡す用途）。
+        """
         self._client = paramiko.SSHClient()
         # 社内LAN限定運用かつknown_hostsの事前配布が前提にないため、簡易的に
         # 未知ホストキーを自動登録する。中間者攻撃のリスクがあるため、将来的には
@@ -42,17 +47,31 @@ class SSHConnection:
         transport = self._client.get_transport()
         return transport.open_channel("direct-tcpip", (dest_host, dest_port), ("127.0.0.1", 0))
 
-    def run_command(self, command: str, timeout: float = 30.0) -> tuple[str, str, int]:
-        """コマンドを実行し、(stdout, stderr, exit_status) を返す。"""
-        _, stdout, stderr = self._client.exec_command(command, timeout=timeout)
+    def run_command(
+        self, command: str, timeout: float = 30.0, stdin_data: str | None = None
+    ) -> tuple[str, str, int]:
+        """コマンドを実行し、(stdout, stderr, exit_status) を返す。
+
+        stdin_dataを指定すると、コマンド起動後にその内容を標準入力へ書き込んでから
+        出力を読み取る。oc loginのトークンのようなシークレットをコマンド文字列に
+        直接埋め込むと対象サーバ上の`ps`やログ・API結果に露出するため、その代わりに
+        標準入力経由で渡す用途を想定している。
+        """
+        stdin, stdout, stderr = self._client.exec_command(command, timeout=timeout)
+        if stdin_data is not None:
+            stdin.write(stdin_data)
+            stdin.channel.shutdown_write()
         exit_status = stdout.channel.recv_exit_status()
         return stdout.read().decode(errors="replace"), stderr.read().decode(errors="replace"), exit_status
 
     def close(self) -> None:
+        """SSH接続を閉じる。"""
         self._client.close()
 
     def __enter__(self) -> "SSHConnection":
+        """withブロックで使えるようにするためのコンテキストマネージャ入口。"""
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        """withブロック終了時に接続を閉じる。"""
         self.close()

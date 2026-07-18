@@ -8,12 +8,20 @@
 エラーとして結果に含める。1台の対象サーバやコマンドが失敗しても、
 他の対象サーバ・チェックの結果は影響を受けずに返せるようにするため。
 
-さらに、接続関連の失敗は「ネットワーク到達」「SSH認証」「多段接続」の
-どの段階で起きたのかを区別して結果に含める（stages）。SSH接続自体は
-成功しているのにチェックコマンドが失敗しているだけの状態と、そもそも
-踏み台や対象サーバに繋がっていない状態を、画面上で見分けられるようにする
-ため。事前処理・ログイン（oc login等）の段階は未実装で、実装時にここへ
-追加する想定。
+さらに、接続関連の失敗は「ネットワーク到達」「SSH認証」「多段接続」
+「事前処理（oc login等）」のどの段階で起きたのかを区別して結果に含める
+（stages）。SSH接続自体は成功しているのにチェックコマンドが失敗して
+いるだけの状態と、そもそも踏み台や対象サーバに繋がっていない状態を、
+画面上で見分けられるようにするため。
+
+事前処理（role_setup/setup_definitions）はロール単位で定義し、対象の
+roles全体から重複除去した上で順に実行する。oc loginのようにトークンを
+必要とする事前処理は、コマンド文字列に直接埋め込むと対象サーバ上の`ps`
+やログ・API結果に露出するため、標準入力経由でシークレットを渡す
+（SSHConnection.run_commandのstdin_data）。事前処理の結果（ログイン先の
+ディスク上に書かれるkubeconfig等）は、同じユーザーの以降のSSHセッション
+からも参照できるため、チェックコマンドとは別のexec_command呼び出しに
+分けても状態は引き継がれる。
 
 対象サーバによっては、踏み台から直接ではなく、別の対象サーバ（コマンド
 実行用VM等）を経由しないと到達できない場合がある。targets[].viaで
@@ -59,9 +67,9 @@ def _classify_connection_error(e: Exception) -> str:
     return f"接続に失敗しました: {e}"
 
 
-def _stage(ok: bool, message: str | None = None) -> dict:
-    """1段階分のステータス（成否とメッセージ）を表す辞書を組み立てる。"""
-    return {"ok": ok, "message": message}
+def _stage(ok: bool, message: str | None = None, output: str | None = None) -> dict:
+    """1段階分のステータス（成否・メッセージ・出力）を表す辞書を組み立てる。"""
+    return {"ok": ok, "message": message, "output": output}
 
 
 def _check_names_for_target(cfg: Config, target: Target) -> list[str]:
@@ -71,6 +79,16 @@ def _check_names_for_target(cfg: Config, target: Target) -> list[str]:
         for check_name in cfg.roles.get(role, []):
             if check_name not in names:
                 names.append(check_name)
+    return names
+
+
+def _setup_names_for_target(cfg: Config, target: Target) -> list[str]:
+    """対象サーバのrolesから実行すべき事前処理名を重複除去した上で返す。"""
+    names: list[str] = []
+    for role in target.roles:
+        for setup_name in cfg.role_setup.get(role, []):
+            if setup_name not in names:
+                names.append(setup_name)
     return names
 
 
@@ -114,6 +132,43 @@ def _connect_chain(
             return None, hop.name, _classify_connection_error(e)
 
     return conn, None, None
+
+
+def _run_target_setup(
+    cfg: Config, target_secret, target: Target, target_conn: SSHConnection
+) -> tuple[bool, str | None, str]:
+    """対象サーバの事前処理（role_setupで定義された各コマンド）を順に実行する。
+
+    途中で失敗した場合は (False, エラーメッセージ, それまでの出力) を返し、
+    以降の事前処理・チェックは実行しない。全て成功した場合は
+    (True, None, 全体の出力) を返す。
+
+    secret_keyが指定されている事前処理は、対応する値をコマンド文字列に
+    埋め込まず、標準入力経由で渡す（ps・ログ・API結果への露出を避ける）。
+    """
+    output_parts: list[str] = []
+    for setup_name in _setup_names_for_target(cfg, target):
+        setup_def = cfg.setup_definitions[setup_name]
+
+        stdin_data = None
+        if setup_def.secret_key is not None:
+            stdin_data = target_secret.setup_secrets.get(setup_def.secret_key, "") + "\n"
+
+        try:
+            stdout, stderr, exit_status = target_conn.run_command(setup_def.command, stdin_data=stdin_data)
+        except CONNECTION_ERRORS as e:
+            output_parts.append(f"[{setup_name}] コマンド実行に失敗しました: {e}")
+            return False, f"事前処理「{setup_name}」の実行に失敗しました: {e}", "\n".join(output_parts)
+
+        output_parts.append(f"[{setup_name}] exit={exit_status}\n{stdout}{stderr}")
+        if exit_status != 0:
+            return (
+                False,
+                f"事前処理「{setup_name}」が失敗しました（exit={exit_status}）",
+                "\n".join(output_parts),
+            )
+
+    return True, None, "\n".join(output_parts)
 
 
 def _run_target_checks(cfg: Config, target: Target, target_conn: SSHConnection) -> list[dict]:
@@ -183,13 +238,31 @@ def _run_target(
                 "checks": [],
             }
 
+        stages = {"target_connect": _stage(True)}
+
+        setup_names = _setup_names_for_target(cfg, target)
+        if setup_names:
+            target_secret = secrets_for_env.targets[target.name]
+            setup_ok, setup_message, setup_output = _run_target_setup(
+                cfg, target_secret, target, target_conn
+            )
+            stages["target_setup"] = _stage(setup_ok, setup_message, output=setup_output)
+            if not setup_ok:
+                return {
+                    "name": target.name,
+                    "host": target.host,
+                    "roles": target.roles,
+                    "stages": stages,
+                    "checks": [],
+                }
+
         checks = _run_target_checks(cfg, target, target_conn)
 
     return {
         "name": target.name,
         "host": target.host,
         "roles": target.roles,
-        "stages": {"target_connect": _stage(True)},
+        "stages": stages,
         "checks": checks,
     }
 

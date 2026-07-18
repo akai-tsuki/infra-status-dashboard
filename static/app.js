@@ -27,6 +27,7 @@
     bastion_network: "踏み台へのネットワーク到達",
     bastion_auth: "踏み台のSSH認証",
     target_connect: "対象サーバへの多段SSH接続",
+    target_setup: "事前処理",
   };
 
   function allStagesOk(stages) {
@@ -38,6 +39,8 @@
     container.className = "stage-list";
     for (const [key, stage] of Object.entries(stages)) {
       const label = STAGE_LABELS[key] || key;
+      const item = document.createElement("div");
+
       const span = document.createElement("span");
       span.className = "stage " + (stage.ok ? "stage-ok" : "stage-ng");
       let text = (stage.ok ? "✓ " : "✗ ") + label;
@@ -45,7 +48,16 @@
         text += `: ${stage.message}`;
       }
       span.textContent = text;
-      container.appendChild(span);
+      item.appendChild(span);
+
+      if (stage.output) {
+        const pre = document.createElement("pre");
+        pre.className = "stage-output";
+        pre.textContent = stage.output;
+        item.appendChild(pre);
+      }
+
+      container.appendChild(item);
     }
     return container;
   }
