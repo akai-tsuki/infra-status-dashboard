@@ -60,6 +60,7 @@ def _classify_connection_error(e: Exception) -> str:
 
 
 def _stage(ok: bool, message: str | None = None) -> dict:
+    """1段階分のステータス（成否とメッセージ）を表す辞書を組み立てる。"""
     return {"ok": ok, "message": message}
 
 
@@ -116,6 +117,12 @@ def _connect_chain(
 
 
 def _run_target_checks(cfg: Config, target: Target, target_conn: SSHConnection) -> list[dict]:
+    """接続済みの対象サーバに対し、割り当てられた全チェックを実行し結果を返す。
+
+    チェック単位の実行失敗（コマンドが例外を投げた場合。非ゼロ終了コード
+    自体は正常応答として扱い、ここでは失敗にしない）は、他のチェックに
+    影響させず"error"フィールドとして個別の結果に含める。
+    """
     checks = []
     for check_name in _check_names_for_target(cfg, target):
         check_def = cfg.check_definitions[check_name]
@@ -154,6 +161,12 @@ def _run_target(
     target: Target,
     targets_by_name: dict[str, Target],
 ) -> dict:
+    """1台の対象サーバについて、viaを辿って接続した上で全チェックを実行する。
+
+    経路上のいずれかのホップへの接続に失敗した場合は、チェックを実行せず
+    target_connectステージを失敗として返す（他の対象サーバの結果には
+    影響しない）。
+    """
     chain = _build_hop_chain(target, targets_by_name)
 
     with ExitStack() as stack:

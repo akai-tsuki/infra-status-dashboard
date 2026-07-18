@@ -204,6 +204,38 @@ keys/
   構成とする。`config.yaml`側の`targets[].name`・`bastion`をキーとして
   `secrets.yaml`側の認証情報と紐付ける。
 
+## 多段接続（via）による3段構成
+
+対象サーバによっては、踏み台から直接ではなく、別の対象サーバ（コマンド実行用VM等）を
+経由しないと到達できない場合がある（Issue #9）。`targets[].via`に同じ環境内の
+他のtarget名を指定すると、踏み台→(via)→対象サーバの順にSSH接続を継ぎ足して
+到達する。`via`はさらに別の`via`を持てるため、理論上は何段でも辿れる。
+
+```mermaid
+flowchart TB
+    Win["Windows<br/>ダッシュボードアプリ"]
+    Bastion["踏み台サーバ<br/>bastion"]
+    TargetA["target-vm-a<br/>roles: openshift"]
+    SampleVM["sample-vm01<br/>roles: sample_role_a"]
+    CmdServer[["command-server<br/>中継役 兼 監視対象"]]
+    TargetDeep["target-deep<br/>via: command-server"]
+
+    Win -->|"SSH（ID/パスワード）"| Bastion
+    Bastion -->|"SSH（秘密鍵）"| TargetA
+    Bastion -->|"SSH（秘密鍵）"| SampleVM
+    Bastion -->|"SSH（秘密鍵）"| CmdServer
+    CmdServer -->|"SSH（秘密鍵・via）"| TargetDeep
+```
+
+`command-server`は中継役であると同時に、それ自体も`roles`を持つ監視対象になれる
+（中継専用のサーバ種別を別途定義する必要はない）。認証情報は経路上の各ホップについて
+`secrets.yaml`の`targets`に通常のtargetと同じ書式で用意する（`via`専用の新しい
+secrets構造は不要）。経路上のいずれかのホップへの接続に失敗した場合は、
+「中継サーバ「command-server」への接続に失敗しました」のように、どのホップで
+失敗したかを含めて画面に表示する。
+
+図のSVG版は[multi_hop_architecture.svg](multi_hop_architecture.svg)。
+
 ## フェーズ分け
 
 - **フェーズ1（今回のスコープ）**：各チェックのコマンド実行結果を、加工・判定せずに
