@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const envNameEl = document.getElementById("env-name");
+  const envSelectEl = document.getElementById("env-select");
   const intervalInput = document.getElementById("interval-input");
   const toggleBtn = document.getElementById("toggle-btn");
   const refreshBtn = document.getElementById("refresh-btn");
@@ -98,6 +98,26 @@
 
   refreshBtn.addEventListener("click", fetchAndRender);
 
+  envSelectEl.addEventListener("change", async () => {
+    const name = envSelectEl.value;
+    setStatus("環境切り替え中...");
+    try {
+      const res = await fetch("/api/environment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      setStatus("");
+      await fetchAndRender();
+    } catch (err) {
+      setStatus(`環境切り替えに失敗しました: ${err.message}`);
+    }
+  });
+
   intervalInput.addEventListener("change", () => {
     intervalSeconds = Math.max(5, parseInt(intervalInput.value, 10) || 60);
     intervalInput.value = intervalSeconds;
@@ -110,7 +130,16 @@
     try {
       const res = await fetch("/api/config");
       const cfg = await res.json();
-      envNameEl.textContent = `環境: ${cfg.environment}`;
+
+      envSelectEl.innerHTML = "";
+      for (const name of cfg.environments) {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        envSelectEl.appendChild(option);
+      }
+      envSelectEl.value = cfg.current_environment;
+
       intervalSeconds = cfg.polling.interval_seconds;
       autoRefresh = cfg.polling.auto_refresh;
       intervalInput.value = intervalSeconds;
