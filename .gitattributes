@@ -4,3 +4,7 @@ docker/ export-ignore
 Dockerfile export-ignore
 .dockerignore export-ignore
 files/ export-ignore
+
+# start.batはWindowsのcmd.exeで実行するため、LF改行だと解釈に失敗し
+# 何も表示されず即座に終了する問題があった（Issue #3）。CRLFを強制する。
+*.bat text eol=crlf

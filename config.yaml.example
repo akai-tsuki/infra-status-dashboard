@@ -4,6 +4,8 @@
 environments:
   - name: env-a                     # 画面の環境切り替えセレクタに表示される識別名
     bastion:
+      # 短縮ホスト名は環境のDNS設定（search domain等）次第で解決に失敗することがある
+      # （Issue #6）。FQDN（例のようにドメインまで含めた名前）かIPアドレスを指定すること。
       host: bastion-a.example.local
       port: 22
       auth_type: password           # secrets.yaml側の認証情報の種類と対応させる
@@ -110,5 +112,5 @@ polling:
 # 5. Web設定
 # ---------------------------------------------------
 web:
-  listen_addr: ":8080"
+  listen_addr: ":18080"  # 8080番はすでに使用されている環境が多いため18080番を既定値にしている
   auth: none
