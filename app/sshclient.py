@@ -16,6 +16,7 @@ class SSHConnection:
         password: str | None = None,
         key_filename: str | None = None,
         timeout: float = 10.0,
+        sock: paramiko.Channel | None = None,
     ) -> None:
         self._client = paramiko.SSHClient()
         # 社内LAN限定運用かつknown_hostsの事前配布が前提にないため、簡易的に
@@ -29,7 +30,17 @@ class SSHConnection:
             password=password,
             key_filename=key_filename,
             timeout=timeout,
+            sock=sock,
         )
+
+    def open_channel_to(self, dest_host: str, dest_port: int) -> paramiko.Channel:
+        """このSSH接続のTransport上に、他ホストへの直接チャネルを新規に開く。
+
+        多段SSH接続で、この接続を踏み台として対象サーバに繋ぐ際に使う
+        （常時維持している1本のSSH接続上でチャネルを都度張る構成）。
+        """
+        transport = self._client.get_transport()
+        return transport.open_channel("direct-tcpip", (dest_host, dest_port), ("127.0.0.1", 0))
 
     def run_command(self, command: str, timeout: float = 30.0) -> tuple[str, str, int]:
         """コマンドを実行し、(stdout, stderr, exit_status) を返す。"""

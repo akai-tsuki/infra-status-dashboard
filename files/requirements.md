@@ -76,3 +76,7 @@ NOPASSWD設定など事前の権限設定が前提となる。
 - [ ] 接続エラー・タイムアウト時のリトライ方針とUI表示
 - [x] 実装言語・技術スタックの選定 → **Python**（承認済み実行環境で動作させ、未署名exeを作らないため。詳細は development_plan.md 参照）
 - [ ] ログ出力・トラブルシューティング用の情報保持方針
+- [ ] **踏み台サーバのsshd設定で`AllowTcpForwarding yes`が有効になっているかの事前確認**
+      （多段SSH接続は踏み台への1本のSSH接続上で`direct-tcpip`チャネルを都度張る方式のため、
+      `AllowTcpForwarding no`だと`Administratively prohibited`で接続できない。M2の検証で判明。
+      無効になっている場合は踏み台サーバ管理者に設定変更を依頼する必要がある）
