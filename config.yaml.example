@@ -1,0 +1,114 @@
+# ---------------------------------------------------
+# 1. 環境一覧（Kubernetes/OpenShift+VM群のセットを環境単位でグループ化）
+# ---------------------------------------------------
+environments:
+  - name: env-a                     # 画面の環境切り替えセレクタに表示される識別名
+    bastion:
+      host: bastion-a.example.local
+      port: 22
+      auth_type: password           # secrets.yaml側の認証情報の種類と対応させる
+
+    targets:
+      - name: openshift-cmd-vm          # 画面表示用の識別名。secrets.yaml側でもこの名前をキーに使う
+        host: 10.0.0.10
+        port: 22
+        roles: [openshift]
+
+      - name: sample-vm01
+        host: 10.0.0.20
+        roles: [sample_role_a]
+
+      # 1台のVMで複数の役割を兼ねる場合は roles に複数指定する
+      - name: sample-vm02
+        host: 10.0.0.21
+        roles: [sample_role_b]
+
+  - name: env-b                     # 2つ目の環境。構造はenv-aと同じ
+    bastion:
+      host: bastion-b.example.local
+      port: 22
+      auth_type: password
+
+    targets:
+      - name: k8s-cmd-vm                # 素のKubernetesクラスタの例（envによって役割を選べることを示す）
+        host: 10.1.0.10
+        roles: [kubernetes]
+
+      - name: sample-vm01
+        host: 10.1.0.20
+        roles: [sample_role_a]
+
+# ---------------------------------------------------
+# 2. ロール定義（roleごとに実行するチェックのリスト）※全環境で共通
+# ---------------------------------------------------
+roles:
+  kubernetes:
+    - kubectl_get_node
+    - kubectl_get_pods
+
+  openshift:
+    - oc_get_node
+    - oc_get_pods
+    - oc_get_co
+    - oc_get_mcp
+
+  sample_role_a:
+    - sample_check_1
+
+  sample_role_b:
+    - sample_check_2
+    - sample_check_3
+
+# ---------------------------------------------------
+# 3. チェック定義（実行コマンドとパース方法）※全環境で共通
+# ---------------------------------------------------
+check_definitions:
+  kubectl_get_node:
+    command: "kubectl get nodes -o wide"
+    parser: table
+
+  kubectl_get_pods:
+    command: "kubectl get pods -A"
+    parser: table
+
+  oc_get_node:
+    command: "oc get nodes -o wide"
+    parser: table
+
+  oc_get_pods:
+    command: "oc get pods -A"
+    parser: table
+
+  oc_get_co:
+    command: "oc get co"
+    parser: table
+
+  oc_get_mcp:
+    command: "oc get mcp"
+    parser: table
+
+  sample_check_1:
+    command: "sample-status-command"        # 例: sudo権限が必要なステータス確認コマンド等
+    parser: raw_text
+
+  sample_check_2:
+    command: "systemctl is-active sample-service-a"
+    parser: systemd_state
+
+  sample_check_3:
+    command: "systemctl is-active sample-service-b"
+    parser: systemd_state
+
+# ---------------------------------------------------
+# 4. 更新（ポーリング）設定
+# ---------------------------------------------------
+polling:
+  interval_seconds: 60      # デフォルト1分（画面から変更可能な初期値）
+  auto_refresh: true        # 起動時は自動更新ON
+
+# ---------------------------------------------------
+# 5. Web設定
+# ---------------------------------------------------
+web:
+  listen_addr: ":8080"
+  auth: none
