@@ -78,6 +78,17 @@ class CheckDefinition:
 
 
 @dataclass
+class SetupDefinition:
+    command: str
+    secret_key: str | None = None
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SetupDefinition":
+        """config.yamlのsetup_definitions内の1エントリからSetupDefinitionを組み立てる。"""
+        return cls(command=d["command"], secret_key=d.get("secret_key"))
+
+
+@dataclass
 class Polling:
     interval_seconds: int
     auto_refresh: bool
@@ -106,6 +117,8 @@ class Config:
     check_definitions: dict[str, CheckDefinition]
     polling: Polling
     web: Web
+    role_setup: dict[str, list[str]] = field(default_factory=dict)
+    setup_definitions: dict[str, SetupDefinition] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
@@ -118,6 +131,10 @@ class Config:
             },
             polling=Polling.from_dict(d["polling"]),
             web=Web.from_dict(d["web"]),
+            role_setup=d.get("role_setup", {}),
+            setup_definitions={
+                name: SetupDefinition.from_dict(v) for name, v in d.get("setup_definitions", {}).items()
+            },
         )
 
 
@@ -136,11 +153,16 @@ class BastionSecret:
 class TargetSecret:
     username: str
     private_key_path: str
+    setup_secrets: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, d: dict) -> "TargetSecret":
         """secrets.yamlのtargets内の1エントリからTargetSecretを組み立てる。"""
-        return cls(username=d["username"], private_key_path=d["private_key_path"])
+        return cls(
+            username=d["username"],
+            private_key_path=d["private_key_path"],
+            setup_secrets=d.get("setup_secrets", {}),
+        )
 
 
 @dataclass
@@ -220,12 +242,27 @@ def validate(cfg: Config, secrets: Secrets) -> list[str]:
                     f"secrets.yamlの環境「{env.name}」に対象サーバ「{target.name}」の認証情報がありません"
                 )
 
+            target_secret = env_secrets.targets.get(target.name)
+
             for role in target.roles:
                 if role not in cfg.roles:
                     problems.append(
                         f"config.yamlのenvironments「{env.name}」の対象サーバ「{target.name}」が"
                         f"参照しているロール「{role}」がrolesに定義されていません"
                     )
+
+                for setup_name in cfg.role_setup.get(role, []):
+                    setup_def = cfg.setup_definitions.get(setup_name)
+                    if setup_def is None:
+                        # setup_definitionsの欠落自体は下のrole_setupループでまとめて報告する
+                        continue
+                    if setup_def.secret_key is not None and target_secret is not None:
+                        if setup_def.secret_key not in target_secret.setup_secrets:
+                            problems.append(
+                                f"secrets.yamlの対象サーバ「{target.name}」にsetup_secrets"
+                                f"「{setup_def.secret_key}」がありません"
+                                f"（事前処理「{setup_name}」で必要）"
+                            )
 
             if target.via is not None:
                 if target.via not in targets_by_name:
@@ -245,6 +282,14 @@ def validate(cfg: Config, secrets: Secrets) -> list[str]:
                 problems.append(
                     f"config.yamlのroles「{role}」が参照しているチェック「{check_name}」が"
                     f"check_definitionsに定義されていません"
+                )
+
+    for role, setup_names in cfg.role_setup.items():
+        for setup_name in setup_names:
+            if setup_name not in cfg.setup_definitions:
+                problems.append(
+                    f"config.yamlのrole_setup「{role}」が参照している事前処理「{setup_name}」が"
+                    f"setup_definitionsに定義されていません"
                 )
 
     return problems
