@@ -78,3 +78,9 @@ python run.py
   （static/app.js）で出力整形に使う（#19で実装済み）。table整形の異常値判定は
   値だけでなく列名（ヘッダ）も見て判定する（例: `AVAILABLE=False`は異常だが
   `DEGRADED=False`は正常、のように列によって真偽の良し悪しが逆になるため）。
+- サーバ側は標準ライブラリ`logging`で標準出力にログを出す（#21で導入済み）。
+  ロガーは`logging.getLogger(__name__)`でモジュール単位に取得する。`run.py`で
+  `logging.basicConfig(..., stream=sys.stdout)`と設定しており、`stream`指定を
+  外すと既定のsys.stderrに戻って日本語が文字化けするため注意
+  （`sys.stdout.reconfigure(encoding="utf-8")`はstdoutにしか効かないため）。
+  パスワード・トークン・stdin_dataの中身は絶対にログへ出さないこと。

@@ -1,6 +1,7 @@
 """起動スクリプト。config.yaml / secrets.yaml をロードし、Flask + waitressでREST APIサーバを起動する。"""
 
 import argparse
+import logging
 import sys
 
 from waitress import serve
@@ -9,6 +10,15 @@ from app.config import ConfigError, load_config, load_secrets, validate
 from app.server import create_app
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+# logging.basicConfig()は既定でsys.stderrに出力するが、上記でUTF-8化したのは
+# sys.stdoutのみのため、ログの出力先も明示的にsys.stdoutへ合わせる
+# （合わせないと日本語メッセージが元のコンソールエンコーディングで文字化けする）。
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout,
+)
 
 
 def resolve_listen_addr(listen_addr: str) -> tuple[str, int]:
