@@ -52,7 +52,24 @@ python run.py
 - 設定の整合性（config.yamlとsecrets.yamlのキー対応、ロール・チェック定義の参照）は
   `python run.py` 起動時に`app/config.py`の`validate()`でまとめて検証され、
   問題箇所が具体的に表示される。
-- ルートの`ssh_test.py` / `ssh_multihop_test.py`は手動検証用スクリプト（pytestではない）。
+- `scripts/ssh_test.py` / `scripts/ssh_multihop_test.py`は手動検証用スクリプト
+  （pytestではない。`tests/`と紛れないよう`scripts/`配下に置いている）。
+  リポジトリルートから`python scripts/ssh_test.py --host ... --username ... --command ...`
+  のように実行する。
+
+## テスト（pytest）
+
+`app/config.py`（`validate()`・`from_dict()`系）と`run.py`の`resolve_listen_addr()`は
+`tests/`配下にユニットテストがある。SSH接続を伴う部分（sshclient.py・checker.py）は
+モックが難しいため対象外とし、上記の動作確認の方法（docker/testenv）で確認する。
+
+```
+pip install -r requirements-dev.txt
+pytest
+```
+
+新しい分岐やパターン（config.yaml/secrets.yamlの不整合パターン等）を追加したら、
+`tests/test_config.py`にもテストケースを足すこと。
 
 ## 設定ファイルの対応関係
 

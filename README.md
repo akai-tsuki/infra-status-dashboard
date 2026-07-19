@@ -124,3 +124,16 @@ docker run --rm -p 18080:18080 ^
 テスト用の踏み台・対象VMコンテナを個別に用意し、同じDockerネットワークに参加させる
 ことでSSH多段接続を含めて検証できる（`test-bastion` / `target-vm`はこの用途で
 作成したローカル検証用コンテナで、リポジトリの一部ではない）。
+
+## テスト
+
+設定ファイルの読み込み・検証ロジック（`app/config.py`）のユニットテストが
+`tests/`配下にある。
+
+```
+pip install -r requirements-dev.txt
+pytest
+```
+
+SSH接続を伴う部分は、上記のDockerテスト環境（`docker/testenv`）を使った
+手動確認の対象とする。
