@@ -74,5 +74,7 @@ python run.py
 - チェック実行は**サーバ側バックグラウンドスレッド（app/poller.py）で定期実行＋
   結果キャッシュ**方式（#17で移行済み）。APIハンドラ内でSSH接続・チェックを
   同期実行する実装に戻さないこと。
-- `check_definitions`の`parser`（table / systemd_state / raw_text）はフロントエンドでの
-  出力整形に使う（#19。現状は未使用で、生テキスト表示のみ）。
+- `check_definitions`の`parser`（table / systemd_state / raw_text）はフロントエンド
+  （static/app.js）で出力整形に使う（#19で実装済み）。table整形の異常値判定は
+  値だけでなく列名（ヘッダ）も見て判定する（例: `AVAILABLE=False`は異常だが
+  `DEGRADED=False`は正常、のように列によって真偽の良し悪しが逆になるため）。
