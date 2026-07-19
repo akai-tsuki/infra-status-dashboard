@@ -226,6 +226,19 @@ def validate(cfg: Config, secrets: Secrets) -> list[str]:
     """
     problems: list[str] = []
 
+    # bastion.auth_type / web.authは現状「password」「none」のみ実装されている
+    # （値による分岐は行われず、常にID/パスワード認証・認証なしとして動作する）。
+    # 未対応の値を書いても黙って無視されるとハマりやすいため、ここで弾く。
+    for env in cfg.environments:
+        if env.bastion.auth_type != "password":
+            problems.append(
+                f"config.yamlのenvironments「{env.name}」のbastion.auth_typeは"
+                f"現在「password」のみサポートしています（指定値: 「{env.bastion.auth_type}」）"
+            )
+
+    if cfg.web.auth != "none":
+        problems.append(f"config.yamlのweb.authは現在「none」のみサポートしています（指定値: 「{cfg.web.auth}」）")
+
     for env in cfg.environments:
         env_secrets = secrets.environments.get(env.name)
         if env_secrets is None:

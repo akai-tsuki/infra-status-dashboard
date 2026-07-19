@@ -8,7 +8,7 @@ environments:
       # （Issue #6）。FQDN（例のようにドメインまで含めた名前）かIPアドレスを指定すること。
       host: bastion-a.example.local
       port: 22
-      auth_type: password           # secrets.yaml側の認証情報の種類と対応させる
+      auth_type: password           # 現在「password」（ID/パスワード認証）のみサポート
 
     targets:
       - name: openshift-cmd-vm          # 画面表示用の識別名。secrets.yaml側でもこの名前をキーに使う
@@ -140,4 +140,4 @@ polling:
 # ---------------------------------------------------
 web:
   listen_addr: ":18080"  # 8080番はすでに使用されている環境が多いため18080番を既定値にしている
-  auth: none
+  auth: none              # 現在「none」（認証なし、社内LAN限定運用が前提）のみサポート
