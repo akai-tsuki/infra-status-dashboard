@@ -21,12 +21,14 @@
 
 from __future__ import annotations
 
+import logging
 import threading
-import traceback
 from datetime import datetime
 
 from app.checker import _stage, run_checks
 from app.config import Config, Secrets
+
+logger = logging.getLogger(__name__)
 
 
 class StatusPoller:
@@ -132,7 +134,7 @@ class StatusPoller:
         try:
             return run_checks(self._cfg, self._secrets, env_name=env_name)
         except Exception as e:  # noqa: BLE001
-            traceback.print_exc()
+            logger.exception("環境「%s」のチェック実行中に予期しないエラーが発生しました", env_name)
             return {
                 "environment": env_name,
                 "stages": {
