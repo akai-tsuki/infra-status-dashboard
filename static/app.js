@@ -27,12 +27,6 @@
   // 再描画時のデフォルト（異常なら開く・正常なら閉じる）より優先する。
   const manualOpenState = new Map();
 
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
   function setStatus(msg) {
     statusMsgEl.textContent = msg;
   }
@@ -122,6 +116,136 @@
     });
   }
 
+  // parser="table"の出力で、値そのものが異常を示す（列によらず判断できる）文字列
+  const BAD_STATUS_VALUES = new Set([
+    "notready", "error", "unknown", "failed",
+    "pending", "crashloopbackoff", "imagepullbackoff", "terminating", "oomkilled",
+  ]);
+
+  // True/Falseの「良し悪し」は列によって逆になる（例: oc get co の
+  // AVAILABLE=Falseは異常だが、DEGRADED=Falseは正常）ため、値だけでなく
+  // ヘッダ名も見て判定する。ここに載っていない列名のTrue/Falseは判定しない
+  // （色を付けない）。
+  const BOOLEAN_GOOD_WHEN_TRUE_HEADERS = new Set(["available", "updated"]);
+  const BOOLEAN_GOOD_WHEN_FALSE_HEADERS = new Set(["degraded", "progressing", "updating"]);
+
+  function isBadCellValue(raw, headerName) {
+    const v = raw.trim().toLowerCase();
+    const h = (headerName || "").trim().toLowerCase();
+
+    if (BOOLEAN_GOOD_WHEN_TRUE_HEADERS.has(h)) {
+      return v === "false";
+    }
+    if (BOOLEAN_GOOD_WHEN_FALSE_HEADERS.has(h)) {
+      return v === "true";
+    }
+    if (BAD_STATUS_VALUES.has(v) || v.startsWith("not")) {
+      // "not"始まりはNotReady等、他にも出てきうる「Not〜」系の値を広く拾うため
+      return true;
+    }
+    // READY列などで見られる"0/1"のような分数表記。分子・分母が一致しない場合を異常とみなす
+    const ratio = v.match(/^(\d+)\/(\d+)$/);
+    if (ratio && ratio[1] !== ratio[2]) {
+      return true;
+    }
+    return false;
+  }
+
+  // kubectl/oc get系の空白区切りテーブル出力をHTMLテーブルに整形する。
+  // 列の境界は2個以上の連続した空白とみなす（値自体に単一空白を含む列は非対応）。
+  // ヘッダ+データ行が揃っていない場合はnullを返し、呼び出し側で生テキスト表示にフォールバックする。
+  function renderTableOutput(stdout) {
+    const lines = stdout.split("\n").map((l) => l.trimEnd()).filter((l) => l.trim() !== "");
+    if (lines.length < 2) {
+      return null;
+    }
+
+    const header = lines[0].trim().split(/\s{2,}/);
+    const rows = lines.slice(1).map((line) => line.trim().split(/\s{2,}/));
+
+    const table = document.createElement("table");
+    table.className = "check-output-table";
+
+    const thead = document.createElement("thead");
+    const headTr = document.createElement("tr");
+    for (const h of header) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      headTr.appendChild(th);
+    }
+    thead.appendChild(headTr);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const cells of rows) {
+      const tr = document.createElement("tr");
+      cells.forEach((cell, i) => {
+        const td = document.createElement("td");
+        td.textContent = cell;
+        if (isBadCellValue(cell, header[i])) {
+          td.className = "cell-bad";
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+
+    return table;
+  }
+
+  const SYSTEMD_STATE_CLASS = {
+    active: "state-active",
+    reloading: "state-active",
+    failed: "state-failed",
+    inactive: "state-inactive",
+    unknown: "state-unknown",
+    activating: "state-pending",
+    deactivating: "state-pending",
+  };
+
+  // systemctl is-active系の単語出力（active/inactive/failed等）を色付きバッジにする。
+  // 空文字列（想定外の出力）はnullを返し、生テキスト表示にフォールバックする。
+  function renderSystemdStateOutput(stdout) {
+    const state = stdout.trim();
+    if (!state) {
+      return null;
+    }
+    const span = document.createElement("span");
+    span.className = "systemd-state-badge " + (SYSTEMD_STATE_CLASS[state.toLowerCase()] || "state-unknown");
+    span.textContent = state;
+    return span;
+  }
+
+  // check.parserに応じてstdoutを整形する。パース失敗時・未知のparserの場合は生テキスト表示。
+  function renderCheckOutput(check) {
+    const wrapper = document.createElement("div");
+
+    let formatted = null;
+    if (check.parser === "table") {
+      formatted = renderTableOutput(check.stdout);
+    } else if (check.parser === "systemd_state") {
+      formatted = renderSystemdStateOutput(check.stdout);
+    }
+
+    if (formatted) {
+      wrapper.appendChild(formatted);
+    } else {
+      const pre = document.createElement("pre");
+      pre.textContent = check.stdout;
+      wrapper.appendChild(pre);
+    }
+
+    if (check.stderr) {
+      const pre = document.createElement("pre");
+      pre.className = "check-stderr";
+      pre.textContent = "[stderr]\n" + check.stderr;
+      wrapper.appendChild(pre);
+    }
+
+    return wrapper;
+  }
+
   function renderChecksTable(target) {
     const table = document.createElement("table");
     table.innerHTML = "<thead><tr><th>チェック</th><th>コマンド</th><th>exit</th><th>出力</th></tr></thead>";
@@ -130,22 +254,33 @@
     for (const check of target.checks) {
       const tr = document.createElement("tr");
 
+      const nameTd = document.createElement("td");
+      nameTd.textContent = check.name;
+      tr.appendChild(nameTd);
+
+      const cmdTd = document.createElement("td");
+      const code = document.createElement("code");
+      code.textContent = check.command;
+      cmdTd.appendChild(code);
+      tr.appendChild(cmdTd);
+
       if (check.error) {
-        tr.innerHTML = `
-          <td>${escapeHtml(check.name)}</td>
-          <td><code>${escapeHtml(check.command)}</code></td>
-          <td class="exit-error" colspan="2">${escapeHtml(check.error)}</td>
-        `;
+        const errTd = document.createElement("td");
+        errTd.className = "exit-error";
+        errTd.colSpan = 2;
+        errTd.textContent = check.error;
+        tr.appendChild(errTd);
       } else {
-        const output = check.stdout + (check.stderr ? "\n[stderr]\n" + check.stderr : "");
-        const exitClass = check.exit_status === 0 ? "exit-ok" : "exit-error";
-        tr.innerHTML = `
-          <td>${escapeHtml(check.name)}</td>
-          <td><code>${escapeHtml(check.command)}</code></td>
-          <td class="${exitClass}">${check.exit_status}</td>
-          <td><pre>${escapeHtml(output)}</pre></td>
-        `;
+        const exitTd = document.createElement("td");
+        exitTd.className = check.exit_status === 0 ? "exit-ok" : "exit-error";
+        exitTd.textContent = check.exit_status;
+        tr.appendChild(exitTd);
+
+        const outputTd = document.createElement("td");
+        outputTd.appendChild(renderCheckOutput(check));
+        tr.appendChild(outputTd);
       }
+
       tbody.appendChild(tr);
     }
 
